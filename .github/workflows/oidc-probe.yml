@@ -27,9 +27,6 @@ jobs:
     steps:
       - name: Exchange GitHub OIDC token for a Quay robot token
         run: |
-          [[ -n "$QUAY_USER" ]] || \
-              { echo "::error::secret QUAY_USER is unset"; exit 1; }
-
           OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r -e .value)
           echo "::add-mask::$OIDC"
@@ -44,7 +41,12 @@ jobs:
           esac
           SUB=$(printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.sub')
           echo "presenting sub: ${SUB}"
-          echo "robot account:  ${QUAY_USER}"
+          echo "robot account:  ${QUAY_USER:-<unset>}"
+
+          # Checked after the sub is reported, so a run without the secret
+          # still tells us the exact subject to register with Quay.
+          [[ -n "$QUAY_USER" ]] || \
+              { echo "::error::secret QUAY_USER is unset"; exit 1; }
 
           code=$(curl -sS -o /tmp/quay-resp -w '%{http_code}' \
               "https://quay.io/oauth2/federation/robot/token" \
