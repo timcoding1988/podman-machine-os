@@ -21,11 +21,27 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     environment: release
+    # Same pinned image the upstream publish job uses, so the probe runs in
+    # the real execution environment rather than a stand-in.
+    container:
+      image: ghcr.io/podman-container-tools/podman-machine-os-ci:20261006t125107z@sha256:bb129c520d0148f363af50c07354d832d3268a60e2ee24f12dba40edbd0d0012
+      options: --privileged
     permissions:
       id-token: write
     env:
       QUAY_USER: ${{ secrets.QUAY_USER }}
     steps:
+      - name: Report available tooling
+        run: |
+          for t in curl jq podman buildah git gh; do
+              if command -v "$t" >/dev/null 2>&1; then
+                  echo "present: $t"
+              else
+                  echo "MISSING: $t"
+              fi
+          done
+          head -2 /etc/os-release 2>/dev/null || true
+
       - name: Exchange GitHub OIDC token for a Quay robot token
         run: |
           OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
