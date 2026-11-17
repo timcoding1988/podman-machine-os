@@ -1,0 +1,63 @@
+# TEMPORARY - fork-only probe for Quay OIDC federation.
+#
+# Isolates the token exchange from release.yml so it can be tested in seconds
+# on a standard runner, without building disk images or pushing anything.
+# Pushes nothing: it exchanges a token and reports whether Quay accepted it.
+#
+# Do NOT merge upstream. Delete this file before opening the PR.
+name: oidc-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - oidc-federation-test
+    tags:
+      - 'probe-v*'
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    env:
+      QUAY_USER: ${{ secrets.QUAY_USER }}
+    steps:
+      - name: Exchange GitHub OIDC token for a Quay robot token
+        run: |
+          [[ -n "$QUAY_USER" ]] || \
+              { echo "::error::secret QUAY_USER is unset"; exit 1; }
+
+          OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r -e .value)
+          echo "::add-mask::$OIDC"
+
+          # Decode only the `sub` claim so a rejection tells us what we
+          # presented vs. what Quay has registered. The payload is not the
+          # credential; the signature (third segment) is never printed.
+          payload=$(cut -d. -f2 <<<"$OIDC")
+          case $(( ${#payload} % 4 )) in
+              2) payload="${payload}==" ;;
+              3) payload="${payload}=" ;;
+          esac
+          SUB=$(printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.sub')
+          echo "presenting sub: ${SUB}"
+          echo "robot account:  ${QUAY_USER}"
+
+          code=$(curl -sS -o /tmp/quay-resp -w '%{http_code}' \
+              "https://quay.io/oauth2/federation/robot/token" \
+              -u "$QUAY_USER:$OIDC")
+
+          echo "quay responded: HTTP ${code}"
+          if [[ "$code" == "200" ]]; then
+              TOK=$(jq -r -e .token </tmp/quay-resp)
+              echo "::add-mask::$TOK"
+              echo "federation exchange OK (token length ${#TOK})"
+          else
+              echo "::error::federation exchange failed with HTTP ${code}"
+              # Error bodies carry no credential material.
+              cat /tmp/quay-resp
+              exit 1
+          fi
